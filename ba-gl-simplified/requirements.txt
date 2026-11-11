@@ -1,0 +1,4 @@
+# Only one dependency: a SQLCipher-enabled sqlite3 binding.
+# Prebuilt wheels are published for Python 3.8 - 3.14 on Windows / macOS / Linux,
+# so a normal `pip install` needs no compiler and no SQLCipher sources.
+sqlcipher3-wheels>=0.5.0

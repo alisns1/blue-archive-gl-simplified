@@ -1,18 +1,27 @@
+# --- game data / build artifacts (never commit these) ---
+
 *.db
 *.sqlite
 *.bytes
 *.bin
 work/
+fonts/
 libs/
 phonedata/
 update_work/
 ExcelDB*.db*
 TableCatalog*.bytes
+
+# --- python ---
+
 __pycache__/
 *.py[cod]
 .venv/
 venv/
 .env
+
+# --- editors / os ---
+
 .vscode/
 .idea/
 .DS_Store

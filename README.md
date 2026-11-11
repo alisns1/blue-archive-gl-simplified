@@ -149,7 +149,7 @@ powershell -ExecutionPolicy Bypass -File localize_phone.ps1 -DryRun
 3. 繁 → 简（等长字节替换）
 4. 重算 TableCatalog.bytes 里的 CRC32，让客户端校验通过
 5. 推回手机
-6. 替换游戏内置中文字体 → 思源黑体（字体统一，首次自动下载约 17 MB）
+6. 替换游戏内置中文字体 → 思源黑体（字体统一；字体已随压缩包附带，无需额外下载）
 7. 把 App 语言设成简体中文（Android 13+，能让部分界面文字走简体字形）
 8. 完事
 ```
@@ -300,7 +300,7 @@ BA_KEY=<64位hex> ./localize_phone.sh
 ├── docs/
 │   ├── HOW_IT_WORKS.md       原理、SQLCipher 参数、catalog 布局、踩坑记录
 │   └── 字体问题.md            字体问题：现象、根因、修复步骤、验证、回滚
-├── fonts/                    首次运行自动下载的思源黑体（也可用 -FontRegular 指定）
+├── fonts/                    思源黑体 Regular + Bold（压缩包自带；缺失时才自动下载）
 └── requirements.txt
 ```
 
@@ -322,9 +322,9 @@ The **font issue** is fixed in the same one-click run: the built-in `NotoSansTC`
 20,748 CJK codepoints and lacks many Simplified glyphs, so Unity falls back to a system font
 per-character and words end up with mixed weights/sizes. The script swaps the two `Font` assets in
 `.../Preload/Android/prologdepengroup-…-mxprolog-*.bundle` for Noto Sans SC and restores the
-bundle CRC32 (otherwise the client silently re-downloads it). The two fonts (~17 MB) are fetched
-from this repository's release on first run; `-SkipFont` skips the stage, and a failed font stage
-never affects the text localisation.
+bundle CRC32 (otherwise the client silently re-downloads it). The two fonts (~17 MB) ship inside
+the zip and are only downloaded from the release if they are missing; `-SkipFont` skips the stage,
+and a failed font stage never affects the text localisation.
 
 Requires `adb` + `sqlcipher3-wheels` (plus `unitypy==1.25.2` and `lz4` for the font stage).
 **Re-run after each game update.**

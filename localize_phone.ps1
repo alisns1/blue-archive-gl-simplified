@@ -213,17 +213,54 @@ Step 'pushing the patched files back'
 
 $FontRelease = 'https://github.com/alisns1/blue-archive-gl-simplified/releases/download/1.1.0'
 
+# A truncated download (GitHub sometimes drops the connection) would poison the bundle: the
+# patched m_FontData would be a broken OTF and the game would render bold text with missing
+# glyphs.  So every auto-discovered / downloaded font must look like a real OpenType-CFF
+# font of a plausible size before it is used.
+$MinFontBytes = 6000000
+
+function Test-FontFile($path) {
+    if (-not $path) { return $false }
+    if (-not (Test-Path $path)) { return $false }
+    $len = (Get-Item $path).Length
+    if ($len -lt $MinFontBytes) {
+        Bad ("font looks truncated: {0} ({1:N0} bytes, expected more than {2:N0})" -f (Split-Path $path -Leaf), $len, $MinFontBytes)
+        return $false
+    }
+    try {
+        $fs  = New-Object System.IO.FileStream($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read)
+        $buf = New-Object byte[] 4
+        $null = $fs.Read($buf, 0, 4)
+        $fs.Dispose()
+        $magic = [System.Text.Encoding]::ASCII.GetString($buf)
+    } catch {
+        Bad ("could not read {0}" -f (Split-Path $path -Leaf))
+        return $false
+    }
+    if ($magic -ne 'OTTO') {
+        Bad ("not an OpenType/CFF font: {0} (starts with '{1}')" -f (Split-Path $path -Leaf), $magic)
+        return $false
+    }
+    return $true
+}
+
 function Get-FontFile($explicit, $name, $kind) {
     if ($explicit) {
         if (Test-Path $explicit) { return (Resolve-Path $explicit).Path }
         Bad "$kind font not found: $explicit"
         return $null
     }
+    $cands = @()
     foreach ($p in @((Join-Path $Root "fonts\$name"), (Join-Path $Root $name))) {
-        if (Test-Path $p) { return (Resolve-Path $p).Path }
+        if (Test-Path $p) { $cands += (Resolve-Path $p).Path }
     }
     foreach ($f in @(Get-ChildItem -Path (Join-Path $Root 'NotoSansSC-*.otf') -ErrorAction SilentlyContinue)) {
-        if ($f.Name -match $kind) { return $f.FullName }
+        if ($f.Name -match $kind) { $cands += $f.FullName }
+    }
+    foreach ($c in $cands) {
+        if (Test-FontFile $c) { return $c }
+        Write-Host '     that copy is unusable; a fresh one will be downloaded ...' -ForegroundColor Yellow
+        Remove-Item $c -ErrorAction SilentlyContinue
     }
     return $null
 }
@@ -232,24 +269,27 @@ function Save-FontFromRelease($name) {
     $dir  = Join-Path $Root 'fonts'
     $dest = Join-Path $dir $name
     New-Item -ItemType Directory -Force $dir | Out-Null
-    Write-Host "  downloading $name (about 8 MB) ..."
-    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
-    try {
-        $wc = New-Object System.Net.WebClient
-        $wc.Headers.Add('User-Agent', 'ba-gl-simplified')
-        $wc.DownloadFile("$FontRelease/$name", $dest)
-    } catch {
-        Bad ("download failed: " + $_.Exception.Message)
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        Write-Host "  downloading $name (about 8 MB) ..."
+        try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
+        try {
+            $wc = New-Object System.Net.WebClient
+            $wc.Headers.Add('User-Agent', 'ba-gl-simplified')
+            $wc.DownloadFile("$FontRelease/$name", $dest)
+        } catch {
+            Bad ("download failed: " + $_.Exception.Message)
+            Remove-Item $dest -ErrorAction SilentlyContinue
+            continue
+        }
+        if (Test-FontFile $dest) {
+            Ok ("downloaded {0} ({1:N1} MB)" -f $dest, ((Get-Item $dest).Length / 1MB))
+            return $dest
+        }
         Remove-Item $dest -ErrorAction SilentlyContinue
-        return $null
+        Bad ("download attempt $attempt gave an unusable file; retrying ...")
     }
-    if (-not (Test-Path $dest) -or ((Get-Item $dest).Length -lt 1MB)) {
-        Bad 'download failed (missing or truncated file).'
-        Remove-Item $dest -ErrorAction SilentlyContinue
-        return $null
-    }
-    Ok ("downloaded {0} ({1:N1} MB)" -f $dest, ((Get-Item $dest).Length / 1MB))
-    return $dest
+    Bad "could not obtain a valid copy of $name"
+    return $null
 }
 
 function Invoke-FontStage {
@@ -293,7 +333,15 @@ function Invoke-FontStage {
         Write-Host '     or pass -FontRegular <path> -FontBold <path>, or skip with -SkipFont'
         return
     }
-    Ok ("fonts: {0} + {1}" -f (Split-Path $reg -Leaf), (Split-Path $bold -Leaf))
+    if (-not (Test-FontFile $reg)) {
+        Bad 'the Regular font is unusable - skipping the optional font stage.'
+        return
+    }
+    if (-not (Test-FontFile $bold)) {
+        Bad 'the Bold font is unusable - skipping the optional font stage.'
+        return
+    }
+    Ok ("fonts: {0} ({1:N1} MB) + {2} ({3:N1} MB)" -f (Split-Path $reg -Leaf), ((Get-Item $reg).Length / 1MB), (Split-Path $bold -Leaf), ((Get-Item $bold).Length / 1MB))
 
     $remoteDir = "$Base/Preload/Android"
     $fontDir   = Join-Path $Work 'font'
@@ -301,43 +349,67 @@ function Invoke-FontStage {
     $origDir   = Join-Path $fontDir 'orig'
     New-Item -ItemType Directory -Force -Path $pullDir, $origDir | Out-Null
 
-    $names = @()
+    $all = @()
     foreach ($line in @(& $Adb -s $Dev shell "ls -1 $remoteDir/" 2>&1)) {
         $t = ([string]$line).Trim()
-        if ($t -match '^prologdepengroup.*\.bundle$') { $names += $t }
+        if ($t -match '^prologdepengroup.*\.bundle$') { $all += $t }
     }
-    if ($names.Count -eq 0) {
+    if ($all.Count -eq 0) {
         Bad "no prologdepengroup*.bundle under $remoteDir - skipping the font stage."
         return
     }
-    Ok ("candidate bundle(s): " + ($names -join ', '))
 
-    # Pull every candidate (usually 2-4 files; the small ones do not hold the fonts but
-    # --find needs to inspect them).  Keep a pristine copy of each before overwriting.
-    $pulled = @()
-    foreach ($n in $names) {
-        $local = Join-Path $pullDir $n
-        Remove-Item $local -ErrorAction SilentlyContinue
-        & $Adb -s $Dev pull "$remoteDir/$n" $local 2>&1 | Out-Null
-        if (Test-Path $local) {
-            $pulled += $local
-            Copy-Item $local (Join-Path $origDir $n) -Force
-        } else {
-            Bad "pull failed: $n"
-        }
+    # The two font assets live in ONE bundle whose name contains "-uis-_mxcommon-"
+    # (e.g. prologdepengroup-assets-_mx-uis-_mxcommon-_mxprolog-2026-03-13_...).
+    # Pulling only those few first keeps this stage fast (tens of MB instead of ~1 GB);
+    # if the naming ever changes we fall back to pulling every group bundle.
+    $preferred = @($all | Where-Object { $_ -match '-uis-_mxcommon-' })
+    $rest      = @($all | Where-Object { $_ -notmatch '-uis-_mxcommon-' })
+    if ($preferred.Count -eq 0) {
+        $preferred = @($all)
+        $rest      = @()
     }
-    if ($pulled.Count -eq 0) { Bad 'could not pull any bundle - skipping the font stage.'; return }
-    Ok ("pulled {0} bundle(s); originals saved under {1}" -f $pulled.Count, $origDir)
 
     $outBundle = Join-Path $fontDir 'patched.bundle'
-    Remove-Item $outBundle -ErrorAction SilentlyContinue
-    $fontArgs = @($PatchFont, '--find', $pullDir, '--regular', $reg, '--bold', $bold, '--out', $outBundle)
-    $log = @(& $Py @PyArgs -u @fontArgs 2>&1)
+
+    function Pull-BundleList($list) {
+        $idx = 0
+        foreach ($n in $list) {
+            $idx++
+            $local = Join-Path $pullDir $n
+            if (Test-Path $local) { continue }
+            Write-Host ("  pulling [{0}/{1}] {2}" -f $idx, $list.Count, $n)
+            & $Adb -s $Dev pull "$remoteDir/$n" $local 2>&1 | Out-Null
+            if (Test-Path $local) {
+                # Keep the FIRST copy as the rollback source: re-running the script must not
+                # overwrite the only pristine backup with an already patched bundle.
+                $orig = Join-Path $origDir $n
+                if (-not (Test-Path $orig)) { Copy-Item $local $orig -Force }
+            } else {
+                Bad "pull failed: $n"
+            }
+        }
+    }
+
+    function Run-PatchFont {
+        Remove-Item $outBundle -ErrorAction SilentlyContinue
+        $fontArgs = @($PatchFont, '--find', $pullDir, '--regular', $reg, '--bold', $bold, '--out', $outBundle)
+        return @(& $Py @PyArgs -u @fontArgs 2>&1)
+    }
+
+    Pull-BundleList $preferred
+    $log = Run-PatchFont
+    if (-not (Test-Path $outBundle) -and $rest.Count -gt 0) {
+        Write-Host '  not in the uis/common bundles - trying the remaining group bundles (slower) ...'
+        Pull-BundleList $rest
+        $log = Run-PatchFont
+    }
     foreach ($line in $log) { Write-Host "  $line" }
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $outBundle)) {
+    if (-not (Test-Path $outBundle)) {
         Bad 'patch_font.py failed - the game bundle was NOT modified (text part is unaffected).'
         return
     }
+    Ok ("originals saved under {0}" -f $origDir)
 
     $crcOk = $false
     $hit   = $null

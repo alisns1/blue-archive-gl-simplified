@@ -9,7 +9,10 @@ param(
     [string]$Serial = "",
     [string]$Key = "",
     [string]$Python = "",
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$SkipFont,
+    [string]$FontRegular = "",
+    [string]$FontBold = ""
 )
 $ErrorActionPreference = 'Continue'
 
@@ -198,7 +201,165 @@ Step 'pushing the patched files back'
 & $Adb -s $Dev push $CnDb "$Base/Preload/TableBundles/ExcelDB.db" 2>&1 | Select-String 'pushed|error'
 & $Adb -s $Dev push $CnCat "$Base/Catalog/TableBundles/TableCatalog.bytes" 2>&1 | Select-String 'pushed|error'
 
-Step 'done'
+# ---------------------------------------------------------------- bundled font (optional)
+# The game ships NotoSansTC-Medium / NotoSansTC-Bold inside a prolog bundle in the download
+# directory.  That font is a Traditional-Chinese subset, so Simplified-only glyphs fall back
+# to a system font and look thinner/smaller.  tools\patch_font.py swaps m_FontData for
+# Noto Sans SC, keeps the asset names/PathIDs, and restores the bundle CRC32 so the client
+# does not silently re-download the original.
+#
+# This stage is optional on purpose: every step below only prints [!!] and returns, so a
+# missing font download or missing UnityPy never affects the text localisation above.
+
+$FontRelease = 'https://github.com/alisns1/blue-archive-gl-simplified/releases/download/v1.1.0'
+
+function Get-FontFile($explicit, $name, $kind) {
+    if ($explicit) {
+        if (Test-Path $explicit) { return (Resolve-Path $explicit).Path }
+        Bad "$kind font not found: $explicit"
+        return $null
+    }
+    foreach ($p in @((Join-Path $Root "fonts\$name"), (Join-Path $Root $name))) {
+        if (Test-Path $p) { return (Resolve-Path $p).Path }
+    }
+    foreach ($f in @(Get-ChildItem -Path (Join-Path $Root 'NotoSansSC-*.otf') -ErrorAction SilentlyContinue)) {
+        if ($f.Name -match $kind) { return $f.FullName }
+    }
+    return $null
+}
+
+function Save-FontFromRelease($name) {
+    $dir  = Join-Path $Root 'fonts'
+    $dest = Join-Path $dir $name
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    Write-Host "  downloading $name (about 8 MB) ..."
+    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
+    try {
+        $wc = New-Object System.Net.WebClient
+        $wc.Headers.Add('User-Agent', 'ba-gl-simplified')
+        $wc.DownloadFile("$FontRelease/$name", $dest)
+    } catch {
+        Bad ("download failed: " + $_.Exception.Message)
+        Remove-Item $dest -ErrorAction SilentlyContinue
+        return $null
+    }
+    if (-not (Test-Path $dest) -or ((Get-Item $dest).Length -lt 1MB)) {
+        Bad 'download failed (missing or truncated file).'
+        Remove-Item $dest -ErrorAction SilentlyContinue
+        return $null
+    }
+    Ok ("downloaded {0} ({1:N1} MB)" -f $dest, ((Get-Item $dest).Length / 1MB))
+    return $dest
+}
+
+function Invoke-FontStage {
+    if ($SkipFont) { Ok 'font stage skipped (-SkipFont)'; return }
+
+    $PatchFont = Join-Path $Root 'tools\patch_font.py'
+    if (-not (Test-Path $PatchFont)) { Bad "missing $PatchFont"; return }
+
+    # UnityPy + lz4 are only needed by this stage (the text stages need sqlcipher3 only),
+    # so they get their own check instead of blocking the Python selection above.
+    $null = & $Py @PyArgs -c "import UnityPy,lz4" 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Bad 'the bundled-font patch needs UnityPy + lz4, which this Python cannot import.'
+        Write-Host '     install them once, then re-run this script:'
+        Write-Host '       pip install -r requirements.txt'
+        Write-Host '     (or skip this optional stage with -SkipFont)'
+        return
+    }
+
+    $reg  = Get-FontFile $FontRegular 'NotoSansSC-Regular.otf' 'Regular'
+    $bold = Get-FontFile $FontBold    'NotoSansSC-Bold.otf'    'Bold'
+    if (-not $reg)  { $reg  = Save-FontFromRelease 'NotoSansSC-Regular.otf' }
+    if (-not $bold) { $bold = Save-FontFromRelease 'NotoSansSC-Bold.otf' }
+    if (-not $reg -or -not $bold) {
+        Bad 'no usable Noto Sans SC fonts - skipping the optional font stage.'
+        Write-Host '     put these two files next to this script and re-run:'
+        Write-Host '       fonts\NotoSansSC-Regular.otf  (about 8.5 MB)'
+        Write-Host '       fonts\NotoSansSC-Bold.otf     (about 8.7 MB)'
+        Write-Host "     download page: $FontRelease"
+        Write-Host '     or pass -FontRegular <path> -FontBold <path>, or skip with -SkipFont'
+        return
+    }
+    Ok ("fonts: {0} + {1}" -f (Split-Path $reg -Leaf), (Split-Path $bold -Leaf))
+
+    $remoteDir = "$Base/Preload/Android"
+    $fontDir   = Join-Path $Work 'font'
+    $pullDir   = Join-Path $fontDir 'pull'
+    $origDir   = Join-Path $fontDir 'orig'
+    New-Item -ItemType Directory -Force -Path $pullDir, $origDir | Out-Null
+
+    $names = @()
+    foreach ($line in @(& $Adb -s $Dev shell "ls -1 $remoteDir/" 2>&1)) {
+        $t = ([string]$line).Trim()
+        if ($t -match '^prologdepengroup.*\.bundle$') { $names += $t }
+    }
+    if ($names.Count -eq 0) {
+        Bad "no prologdepengroup*.bundle under $remoteDir - skipping the font stage."
+        return
+    }
+    Ok ("candidate bundle(s): " + ($names -join ', '))
+
+    # Pull every candidate (usually 2-4 files; the small ones do not hold the fonts but
+    # --find needs to inspect them).  Keep a pristine copy of each before overwriting.
+    $pulled = @()
+    foreach ($n in $names) {
+        $local = Join-Path $pullDir $n
+        Remove-Item $local -ErrorAction SilentlyContinue
+        & $Adb -s $Dev pull "$remoteDir/$n" $local 2>&1 | Out-Null
+        if (Test-Path $local) {
+            $pulled += $local
+            Copy-Item $local (Join-Path $origDir $n) -Force
+        } else {
+            Bad "pull failed: $n"
+        }
+    }
+    if ($pulled.Count -eq 0) { Bad 'could not pull any bundle - skipping the font stage.'; return }
+    Ok ("pulled {0} bundle(s); originals saved under {1}" -f $pulled.Count, $origDir)
+
+    $outBundle = Join-Path $fontDir 'patched.bundle'
+    Remove-Item $outBundle -ErrorAction SilentlyContinue
+    $fontArgs = @($PatchFont, '--find', $pullDir, '--regular', $reg, '--bold', $bold, '--out', $outBundle)
+    $log = @(& $Py @PyArgs -u @fontArgs 2>&1)
+    foreach ($line in $log) { Write-Host "  $line" }
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $outBundle)) {
+        Bad 'patch_font.py failed - the game bundle was NOT modified (text part is unaffected).'
+        return
+    }
+
+    $crcOk = $false
+    $hit   = $null
+    foreach ($line in $log) {
+        $s = [string]$line
+        if ($s -match 'match=True') { $crcOk = $true }
+        if (-not $hit -and $s -match '^\s+(.+\.bundle)\s+\(\d+ bytes\)\s*$') { $hit = $Matches[1].Trim() }
+    }
+    if (-not $crcOk) { Bad 'patch_font.py did not confirm the CRC32 match - refusing to push.'; return }
+    if (-not $hit)   { Bad 'could not tell which bundle was patched - refusing to push.'; return }
+    if (-not (Test-Path $hit)) { $hit = Join-Path $pullDir (Split-Path $hit -Leaf) }
+    if (-not (Test-Path $hit)) { Bad "patched bundle not found: $hit"; return }
+
+    $targetName = Split-Path $hit -Leaf
+    $remote     = "$remoteDir/$targetName"
+    $localMd5   = (Get-FileHash -Algorithm MD5 -Path $outBundle).Hash.ToLower()
+    Step "pushing the unified font bundle ($targetName)"
+    & $Adb -s $Dev push $outBundle $remote 2>&1 | Select-String 'pushed|error'
+    $remoteMd5 = ''
+    $sum = ((& $Adb -s $Dev shell "md5sum '$remote'" 2>&1) -join ' ')
+    if ($sum -match '([0-9a-fA-F]{32})') { $remoteMd5 = $Matches[1].ToLower() }
+    if ($remoteMd5 -eq $localMd5) {
+        Ok "font bundle replaced; device md5 = $remoteMd5"
+        Ok 'fonts unified (restart the game once if it still shows the old font)'
+        Write-Host "  rollback copy: $(Join-Path $origDir $targetName)"
+    } else {
+        Bad "md5 mismatch after push: local $localMd5 / device '$remoteMd5'"
+        Write-Host "  rollback with: adb push `"$(Join-Path $origDir $targetName)`" `"$remote`""
+    }
+}
+
+Step 'unifying the in-game font (optional)'
+Invoke-FontStage
 
 # ---------------------------------------------------------------- font fix
 # The Android client bundles no Chinese font, so Chinese is rendered with a SYSTEM font
@@ -221,6 +382,7 @@ if ($sdk -ge 33) {
     Write-Host '  Simplified Chinese (Settings -> System -> Languages). Same fallback fix.' -ForegroundColor Yellow
 }
 
+Step 'done'
 Ok 'Launch the game - the UI and story text should be Simplified Chinese.'
 Write-Host ''
 Write-Host 'Notes:' -ForegroundColor Yellow

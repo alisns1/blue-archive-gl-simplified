@@ -7,7 +7,7 @@
 - ✅ 改的是**本地显示文本**，不动账号、存档、网络请求
 - ✅ **主要给真机（手机）用**；MuMu / LDPlayer 等模拟器也能用（方便测试）
 - ✅ Windows / Linux / macOS 都有脚本
-- ✅ **字体大小/粗细不一致已修复**（`tools/patch_font.py`，需自备思源黑体，见[说明](docs/字体问题.md)）
+- ✅ **字体大小/粗细不一致已修复**（Windows 一键流程 `运行.bat` 已包含，可选；首次运行自动下载约 17 MB 思源黑体，也可 `-SkipFont` 跳过，见[说明](docs/字体问题.md)）
 
 > 仅适用于 **GL（国际服，繁中）**。日服/韩服/国服的库和文本表不同，不通用。
 
@@ -61,7 +61,8 @@ py -3.12 -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requireme
 ```
 
 > **这行命令什么意思**：`pip` 是 Python 的包管理器；`-r requirements.txt` = "按这个清单文件里列的库来装"。
-> 我们的清单里只有一个 `sqlcipher3-wheels`（2.6 MB，用来读写游戏那个加密数据库）。
+> 清单里有三个：`sqlcipher3-wheels`（2.6 MB，读写游戏那个加密数据库，必需）、
+> `unitypy==1.25.2` + `lz4`（只给可选的字体统一阶段用；不装也能汉化文本，只是字体会跳过）。
 
 **验证是否装好：**
 
@@ -121,6 +122,7 @@ powershell -ExecutionPolicy Bypass -File localize_phone.ps1 -DryRun
 
 ```
 停游戏 → 从手机拉出原文件（备份到 work/） → 繁转简 → 重算 catalog 的 CRC32 → 推回手机
+     → （可选，Windows 脚本）把游戏内置字体换成思源黑体，统一字重 → 完事
 ```
 
 **游戏每次大版本更新后重跑一遍即可。** 重复运行是安全的（已转换过的内容不会被二次转换）。
@@ -134,6 +136,8 @@ Windows：
 .\localize_phone.ps1 -Serial <序列号>  # 多台设备时指定
 .\localize_phone.ps1 -DryRun          # 只拉取 + 转换 + 改 catalog，不推送
 .\localize_phone.ps1 -Key <64位hex>   # 指定密钥
+.\localize_phone.ps1 -SkipFont        # 跳过可选的字体统一阶段
+.\localize_phone.ps1 -FontRegular <Regular.otf> -FontBold <Bold.otf>   # 手动指定思源黑体
 ```
 
 Linux / macOS / WSL：
@@ -175,7 +179,7 @@ adb devices
 | 只想先试不想推送 | 用命令行跑 `.\localize_phone.ps1 -DryRun` |
 | 能在模拟器上用吗 | 能（MuMu / LDPlayer 等都能推）。**本工具主要面向真机手机**，模拟器适合先试；同时连着手机和模拟器时脚本会**优先选真机**，要指定就加 `-Serial <序列号>` |
 | 转换完界面正常但少数词仍是台式 | 词库覆盖面问题，欢迎 PR 补词（改 `dict/` 或提 Issue 给具体词条） |
-| 汉化后**某些字大小/粗细和别的不一样** | **已解决**：游戏内置的 `NotoSansTC` 字体子集缺简体字形，被改动过的字会回退到系统字体。用 `tools/patch_font.py` 把游戏字体换成思源黑体即可（详见 [docs/字体问题.md](docs/字体问题.md)）。不打补丁也**不影响任何功能** |
+| 汉化后**某些字大小/粗细和别的不一样** | **Windows 一键流程已自动处理**：游戏内置的 `NotoSansTC` 字体子集缺简体字形，脚本会把 `prologdepengroup-*.bundle` 里的字体换成思源黑体并还原 CRC32（首次运行自动下载约 17 MB；断网或没装 UnityPy 时只打印 `[!!]` 并继续，不影响文本汉化；也可 `-SkipFont` 跳过）。详见 [docs/字体问题.md](docs/字体问题.md) |
 
 ---
 
@@ -222,6 +226,7 @@ adb devices
 ├── dict/                     OpenCC 词库（Apache-2.0）
 ├── docs/HOW_IT_WORKS.md      原理与踩坑记录
 ├── docs/字体问题.md           字体问题：现象、根因、修复步骤与验证
+├── fonts/                   首次运行自动下载的思源黑体（也可用 -FontRegular 指定）
 └── requirements.txt
 ```
 
@@ -241,10 +246,13 @@ CJK swap), so every FlatBuffer offset stays valid, then rewrites the CRC32 recor
 
 Requires `adb` + `sqlcipher3-wheels`. Re-run after each game update.
 
-The **font weight/size inconsistency is fixed** too: the built-in `NotoSansTC` subset is
-missing many Simplified glyphs, so `tools/patch_font.py` swaps the two `Font` assets in the
-`prologdepengroup-…-mxprolog-*.bundle` for Noto Sans SC and restores the bundle CRC32
-(see [docs/字体问题.md](docs/字体问题.md); bring your own font files).
+The **font weight/size inconsistency is fixed** too, and it is part of the same one-click
+run (optional): the built-in `NotoSansTC` subset is missing many Simplified glyphs, so the
+script swaps the two `Font` assets in `prologdepengroup-…-mxprolog-*.bundle` for Noto Sans SC
+and restores the bundle CRC32. The two fonts (~17 MB total) are downloaded on first run; use
+`-SkipFont` to skip, or `-FontRegular/-FontBold` to supply your own
+(see [docs/字体问题.md](docs/字体问题.md)). A failed font step only prints `[!!]` and never
+affects the text localisation.
 
 See [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) for the reverse-engineered details
 (SQLCipher parameters, the HMAC key-length gotcha, the catalog binary layout).
@@ -291,8 +299,17 @@ cmap 只有 **20,748** 字，缺大量简体字形；缺字时 Unity 回退到�
 `NotoSansSC-Regular/Bold.otf`，保持资产名/PathID 不变，保存时保持原压缩方式，
 并把整个文件的 CRC32 还原成原值（catalog 校验用）。
 
+**一键流程已包含这一步**：双击 `运行.bat`（或跑 `localize_phone.ps1`）时，脚本会在推回
+文本之后自动完成字体替换——首次运行从 GitHub Release 下载两个思源黑体（合计约 17 MB，
+存到 `fonts\`），然后自动找出 `prologdepengroup-*.bundle`、打补丁、校验 CRC32 并推回设备，
+原包备份在 `work\font\orig\`。不想要它就加 `-SkipFont`；它**只影响观感，失败只打印
+`[!!]` 并继续**，不会影响文本汉化。额外依赖（`pip install -r requirements.txt` 会一起装）：
+`unitypy==1.25.2`、`lz4`。
+
+**手动 / 排查路径**（一键流程失败、或想自己核对时再用）：
+
 ```bash
-pip install UnityPy==1.25.2
+pip install -r requirements.txt
 
 # 1. 找当前的包（文件名带日期/hash，游戏更新后会变；只读）
 python tools/patch_font.py --find "<设备>/.../PUB/Preload/Android"
@@ -306,13 +323,14 @@ python tools/patch_font.py --bundle <原包> \
 adb push <输出包> /sdcard/Android/data/com.nexon.bluearchive/files/PUB/Preload/Android/<原文件名>
 ```
 
-需要**自备**原版资源包和思源黑体（Noto Sans SC）。不需要 root，也不改 APK。
+手动跑时需要**自备**原版资源包和思源黑体（Noto Sans SC，可从本仓库 Release 下载）。
+不需要 root，也不改 APK。
 三个关键点：`env.save(pack="original")`（换 lz4 会改 flags，游戏加载失败）、
 还原 CRC32（否则游戏静默重下官方包，表现成「改了没效果」）、同步 header 里的文件长度。
 验证方法、热更覆盖、回滚步骤都写在 👉 **[docs/字体问题.md](docs/字体问题.md)**。
 
-> 这个补丁**不在** `运行.bat` 的自动流程里：它要额外处理一个 ~11 MB 的资源包，
-> 还要用户自备字体，且只影响观感，所以做成独立工具。**不打也不影响任何功能**。
+> `tools/patch_font.py` 仍是独立工具，保留给排查和特殊情况（例如自动识别失效）。
+> 日常使用不需要手动跑它——字体统一已经并入一键流程，**不打也不影响任何功能**。
 
 ---
 

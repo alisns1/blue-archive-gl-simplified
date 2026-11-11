@@ -56,7 +56,7 @@ from t2s import Converter  # noqa: E402
 
 # Publicly known key for Blue Archive GL (identical on PC and Android).
 # Override with --key if your client/region uses another one.
-DEFAULT_KEY = "ef0aaca06f34b4a4be3172a75a3ea565e815f9ece35b1fb12b7a166ba0807bc4"
+DEFAULT_KEY = "05f508236ff3dc4e5dc7cb6fcea0ede0d90a89753dc5e5d36c30393e9b072f48"
 
 # Tables whose blobs can contain player-visible text.
 DEFAULT_TABLE_PATTERN = r"Localize|Dialog|Scenario|Subtitle|Talk|Mail|Name|Emoji|Voice"

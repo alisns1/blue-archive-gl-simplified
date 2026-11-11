@@ -74,11 +74,16 @@ pip install -r requirements.txt
 
 ```cmd
 python -c "import sqlcipher3; print('ok')"
+python -c "import UnityPy, lz4; print('ok')"
 ```
 
-打印 `ok` 就装好了。**装一次即可，以后不用再装。**
+两条都打印 `ok` 就装好了。**装一次即可，以后不用再装。**
 
-> 忘了装也没关系：脚本启动时会自检，发现缺库会**自动帮你装一次**（装到当前 Python 里）。
+> 忘了装也没关系，脚本会自检并**自动补装**：
+> - `sqlcipher3` 缺失 → 脚本启动时就会自动 `pip install`（否则没法跑）
+> - `UnityPy` / `lz4` 缺失 → 跑到字体那一步时自动补装
+>
+> 自动安装用清华源 → 官方源依次尝试；**两条都失败**（比如完全没网）才会跳过字体阶段并提示手动装。
 
 ### 3. adb（手机和电脑的桥）
 
@@ -111,12 +116,17 @@ python -c "import sqlcipher3; print('ok')"
 在仓库文件夹里跑：
 
 ```cmd
+python -c "import sqlcipher3, UnityPy, lz4; print('ok')"
 adb devices
 powershell -ExecutionPolicy Bypass -File localize_phone.ps1 -DryRun
 ```
 
+- 第一条打印 `ok` → 三个依赖都在（缺了见上一节；脚本也会自动补装）
 - `adb devices` 应列出你的设备（后面是 `device`，不是 `unauthorized`）
-- 第二条会一路打印 `[ok]`，到 `[ok] dry run finished` 就是环境全通
+- 第三条会一路打印 `[ok]`，到 `[ok] dry run finished` 就是环境全通
+
+> `-DryRun` 只验证文本流程（拉取 → 转换 → 改 catalog），**不碰字体阶段**；
+> 字体那步要真机推送时才会跑，缺依赖时脚本会当场自动补装。
 
 ---
 

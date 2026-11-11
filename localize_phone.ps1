@@ -262,11 +262,22 @@ function Invoke-FontStage {
     # so they get their own check instead of blocking the Python selection above.
     $null = & $Py @PyArgs -c "import UnityPy,lz4" 2>&1
     if ($LASTEXITCODE -ne 0) {
-        Bad 'the bundled-font patch needs UnityPy + lz4, which this Python cannot import.'
-        Write-Host '     install them once, then re-run this script:'
-        Write-Host '       pip install -r requirements.txt'
-        Write-Host '     (or skip this optional stage with -SkipFont)'
-        return
+        Step 'installing the bundled-font dependencies (one time): UnityPy + lz4'
+        & $Py @PyArgs -m pip install --disable-pip-version-check -i https://pypi.tuna.tsinghua.edu.cn/simple 'UnityPy==1.25.2' lz4
+        $null = & $Py @PyArgs -c "import UnityPy,lz4" 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host '     mirror failed, retrying with the default index ...' -ForegroundColor Yellow
+            & $Py @PyArgs -m pip install --disable-pip-version-check 'UnityPy==1.25.2' lz4
+            $null = & $Py @PyArgs -c "import UnityPy,lz4" 2>&1
+        }
+        if ($LASTEXITCODE -ne 0) {
+            Bad 'the bundled-font patch needs UnityPy + lz4, which this Python cannot import.'
+            Write-Host '     install them once, then re-run this script:'
+            Write-Host '       pip install -r requirements.txt'
+            Write-Host '     (or skip this optional stage with -SkipFont)'
+            return
+        }
+        Ok 'bundled-font dependencies installed.'
     }
 
     $reg  = Get-FontFile $FontRegular 'NotoSansSC-Regular.otf' 'Regular'

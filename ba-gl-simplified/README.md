@@ -7,6 +7,7 @@
 - ✅ 改的是**本地显示文本**，不动账号、存档、网络请求
 - ✅ **主要给真机（手机）用**；MuMu / LDPlayer 等模拟器也能用（方便测试）
 - ✅ Windows / Linux / macOS 都有脚本
+- ✅ **字体大小/粗细不一致已修复**（`tools/patch_font.py`，需自备思源黑体，见[说明](docs/字体问题.md)）
 
 > 仅适用于 **GL（国际服，繁中）**。日服/韩服/国服的库和文本表不同，不通用。
 
@@ -174,7 +175,7 @@ adb devices
 | 只想先试不想推送 | 用命令行跑 `.\localize_phone.ps1 -DryRun` |
 | 能在模拟器上用吗 | 能（MuMu / LDPlayer 等都能推）。**本工具主要面向真机手机**，模拟器适合先试；同时连着手机和模拟器时脚本会**优先选真机**，要指定就加 `-Serial <序列号>` |
 | 转换完界面正常但少数词仍是台式 | 词库覆盖面问题，欢迎 PR 补词（改 `dict/` 或提 Issue 给具体词条） |
-| 汉化后**某些字大小/粗细和别的不一样** | 游戏不自带中文字体，被改动过的字会触发字体回退。脚本会自动设置 App 语言**减轻**这个问题，但彻底解决需要改游戏字体包（详见「已知问题」）。**不影响功能** |
+| 汉化后**某些字大小/粗细和别的不一样** | **已解决**：游戏内置的 `NotoSansTC` 字体子集缺简体字形，被改动过的字会回退到系统字体。用 `tools/patch_font.py` 把游戏字体换成思源黑体即可（详见 [docs/字体问题.md](docs/字体问题.md)）。不打补丁也**不影响任何功能** |
 
 ---
 
@@ -216,9 +217,11 @@ adb devices
 ├── tools/
 │   ├── patch_db.py           繁→简（打开加密库、逐 blob 等长替换）
 │   ├── patch_catalog.py      改 catalog 里的 CRC32
+│   ├── patch_font.py         修字体大小/粗细（替换 NotoSansTC 并还原 bundle CRC32）
 │   └── t2s.py                繁简映射（OpenCC 词库，纯 Python）
 ├── dict/                     OpenCC 词库（Apache-2.0）
 ├── docs/HOW_IT_WORKS.md      原理与踩坑记录
+├── docs/字体问题.md           字体问题：现象、根因、修复步骤与验证
 └── requirements.txt
 ```
 
@@ -237,6 +240,11 @@ CJK swap), so every FlatBuffer offset stays valid, then rewrites the CRC32 recor
 `TableCatalog.bytes` so the client's integrity check still passes.
 
 Requires `adb` + `sqlcipher3-wheels`. Re-run after each game update.
+
+The **font weight/size inconsistency is fixed** too: the built-in `NotoSansTC` subset is
+missing many Simplified glyphs, so `tools/patch_font.py` swaps the two `Font` assets in the
+`prologdepengroup-…-mxprolog-*.bundle` for Noto Sans SC and restores the bundle CRC32
+(see [docs/字体问题.md](docs/字体问题.md); bring your own font files).
 
 See [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) for the reverse-engineered details
 (SQLCipher parameters, the HMAC key-length gotcha, the catalog binary layout).
@@ -266,62 +274,45 @@ See [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) for the reverse-engineered deta
 
 ---
 
-## 已知问题：部分字形的大小 / 粗细不统一
+## 字体大小 / 粗细不一致 —— 已解决
 
-> ⚠️ **本节下方的早期排查记录中，「安卓版不自带中文字体 / 无字体资产可改」的结论已被推翻。**
-> 后续实测发现：GL 安卓端 APK 内 `assets/bin/Data/<GUID>` **确实内置**了字体资产 ——
-> `NotoSansTC-Medium` / `NotoSansTC-Bold`（cmap 仅 20,748 字，**缺简体独有字形**）、
-> `MALGUN`（韩，27,133 字）、`MainFont` / `MainFont_Bold`（韩文标题字体）。
-> 但它们**不在 UI 文本的渲染路径上**：替换下载目录中的 bundle 字体资产、替换系统字体
-> （含中日韩 4 款）、乃至替换 APK 内**全部 12 款**字体，实测渲染**均无变化**；
-> 该 TMP 字体资产的源字体引用为空，且其图集 `m_IsReadable = False`（运行时不写）。
->
-> 完整 8 轮实测数据、cmap 核对、引用链分析见 → **[docs/字体问题.md](docs/字体问题.md)**
->
-> ✅ **结论不变**：不 root、不修改客户端（APK / 引擎代码）的前提下**无法根治**；
-> 脚本自动设置 App 语言可**减轻**。**不影响任何功能**，文本内容 100% 正确。
+> 早期本文写的是「不 root 无解」，该结论**已被推翻**。旧的 8 轮排查记录保留在
+> [docs/字体问题.md](docs/字体问题.md) 的「历史记录」一节，这里只讲结论。
 
-### 现象
+**现象**：汉化后，被改动过的字（動→动、務→务、購→购、覽→览 这类）比繁简同形的字
+（活、一、石 这类）更细或更小，同一行里字体不统一。
 
-汉化后界面是简体、功能完全正常，但**被改动过的字**（動→动、務→务、購→购 这类）比
-**繁简同形的字**（活、一、石 这类）看起来**更细或更小**，同一个词里字体不统一。
+**根因**：游戏内置的 `NotoSansTC-Medium` / `NotoSansTC-Bold` 是按繁体文本裁剪的子集，
+cmap 只有 **20,748** 字，缺大量简体字形；缺字时 Unity 回退到系统字体，于是一行字混用
+两款字体。UI 实际加载的那一份在下载目录里：
+`Preload/Android/prologdepengroup-…-mxprolog-*.bundle`（APK 内虽有同名资产，但不在渲染路径上）。
 
-### 原因（实测定位，已查到底）
+**修复**：把该 bundle 里两个 `Font` 资产的 `m_FontData` 换成思源黑体简体的
+`NotoSansSC-Regular/Bold.otf`，保持资产名/PathID 不变，保存时保持原压缩方式，
+并把整个文件的 CRC32 还原成原值（catalog 校验用）。
 
-```
-安卓版游戏【不自带中文字体，也不指定字体名】
-  · APK 里只有一个 assets/fonts/NotoSansKR-Regular-Hestia.otf（韩文）
-  · GameData 里只有 MALGUN(韩) / MPLUS1p(日) / CCG_LINESeedKR
-  · global-metadata.dat（31.8 MB，全部 C# 字符串）里搜不到任何中文字体名
-    （NotoSansTC / NotoSansSC / Noto Sans / sans-serif / Arial / MainFont … 全都没有）
-  · 只找到 Unity 的 Font.fontNames 与 GetOSInstalledFontNames
-        ↓
-中文渲染完全交给【操作系统按 App 语言挑的系统字体】
-        ↓
-系统字体（或游戏自带日文字体）缺简体独有字形（JIS 有「務/購/輝」没有「务/购/辉」）
-        ↓
-逐字回退到另一款字体 → 一个字串里混了两款字体 → 大小 / 粗细不一致
+```bash
+pip install UnityPy==1.25.2
+
+# 1. 找当前的包（文件名带日期/hash，游戏更新后会变；只读）
+python tools/patch_font.py --find "<设备>/.../PUB/Preload/Android"
+
+# 2. 打补丁：先 --dry-run 看结果（不写文件），确认无误再去掉
+python tools/patch_font.py --bundle <原包> \
+    --regular NotoSansSC-Regular.otf --bold NotoSansSC-Bold.otf \
+    --out <输出包>
+
+# 3. 推回设备（文件名必须与原文件一致）
+adb push <输出包> /sdcard/Android/data/com.nexon.bluearchive/files/PUB/Preload/Android/<原文件名>
 ```
 
-> PC 端没这个问题：PC 版**自带完整中文字体资产**，社区汉化直接替换成思源黑体简体版即可。
-> 安卓版**没有这个资产可换**，也**没有字体名可改** —— 这条路已经查到头。
+需要**自备**原版资源包和思源黑体（Noto Sans SC）。不需要 root，也不改 APK。
+三个关键点：`env.save(pack="original")`（换 lz4 会改 flags，游戏加载失败）、
+还原 CRC32（否则游戏静默重下官方包，表现成「改了没效果」）、同步 header 里的文件长度。
+验证方法、热更覆盖、回滚步骤都写在 👉 **[docs/字体问题.md](docs/字体问题.md)**。
 
-### 目前能做到的
-
-| 方案 | 效果 |
-|---|---|
-| 脚本自动把 App 语言设为简体（Android 13+） | ✅ **能减轻**（让系统优先给完整简体的系统字体），但游戏自带字体造成的回退仍在 |
-| 手机 root 后把系统字体替换为全量简体字体 | ✅ **可彻底解决** |
-| 改游戏资源包 / 改 APK | ❌ 已确认**无字体资产、无字体名可改** |
-| 就这样用 | ✅ 简体文本 100% 正确可读，**只是字形外观不完美，不影响任何功能** |
-
-> **排查记录**（供后来者参考，省得重复走）：
-> 1. `files/PUB` 13.4 GB / 26,068 个 bundle **已全部扫描**；OBB 目录 0 KB（没有）
-> 2. 全盘搜过字体家族名字符串 → 无
-> 3. 游戏进程实际 mmap 的字体全是 `/system/fonts/` 下的：
->    `NotoSansTC-Regular.otf`(3 MB 子集) / `NotoSansSC-Regular/Bold.otf` / `NotoSansCJK-Regular.ttc`
-> 4. `global-metadata.dat` 内无任何中文字体名（见上）
-> 5. 结论：字体选择完全由「OS + App 语言」决定，游戏侧无干预点
+> 这个补丁**不在** `运行.bat` 的自动流程里：它要额外处理一个 ~11 MB 的资源包，
+> 还要用户自备字体，且只影响观感，所以做成独立工具。**不打也不影响任何功能**。
 
 ---
 

@@ -211,7 +211,7 @@ Step 'pushing the patched files back'
 # This stage is optional on purpose: every step below only prints [!!] and returns, so a
 # missing font download or missing UnityPy never affects the text localisation above.
 
-$FontRelease = 'https://github.com/alisns1/blue-archive-gl-simplified/releases/download/v1.1.0'
+$FontRelease = 'https://github.com/alisns1/blue-archive-gl-simplified/releases/download/1.1.0'
 
 function Get-FontFile($explicit, $name, $kind) {
     if ($explicit) {
